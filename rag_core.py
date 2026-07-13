@@ -3,16 +3,16 @@ from langchain_community.document_loaders import PyPDFLoader, TextLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
 from langchain_chroma import Chroma
-from langchain.chains import create_retrieval_chain
-from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.runnables import RunnablePassthrough, RunnableParallel
+from langchain_core.output_parsers import StrOutputParser
 
 # Directory for ChromaDB persistence
 CHROMA_PATH = "chroma_db"
 
 def get_vector_store():
     """Initializes or loads the Chroma vector store."""
-    embeddings = GoogleGenerativeAIEmbeddings(model="models/text-embedding-004")
+    embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
     vector_store = Chroma(
         persist_directory=CHROMA_PATH, 
         embedding_function=embeddings
@@ -45,8 +45,11 @@ def process_and_add_document(file_path):
     
     return len(chunks)
 
+def format_docs(docs):
+    return "\n\n".join(doc.page_content for doc in docs)
+
 def get_qa_chain():
-    """Creates a Retrieval-Augmented Generation (RAG) chain."""
+    """Creates a Retrieval-Augmented Generation (RAG) chain using LCEL."""
     llm = ChatGoogleGenerativeAI(
         model="gemini-1.5-flash",
         temperature=0.3
@@ -57,21 +60,26 @@ def get_qa_chain():
     retriever = vector_store.as_retriever(search_kwargs={"k": 4})
     
     # System prompt for the LLM
-    system_prompt = (
+    prompt = ChatPromptTemplate.from_template(
         "You are an assistant for question-answering tasks. "
         "Use the following pieces of retrieved context to answer the question. "
         "If you don't know the answer, say that you don't know. "
-        "Keep the answer concise and relevant."
-        "\n\n"
-        "{context}"
+        "Keep the answer concise and relevant.\n\n"
+        "Context: {context}\n\n"
+        "Question: {question}"
     )
     
-    prompt = ChatPromptTemplate.from_messages([
-        ("system", system_prompt),
-        ("human", "{input}"),
-    ])
+    # Construct the LCEL chain
+    rag_chain_from_docs = (
+        RunnablePassthrough.assign(context=(lambda x: format_docs(x["context"])))
+        | prompt
+        | llm
+        | StrOutputParser()
+    )
     
-    question_answer_chain = create_stuff_documents_chain(llm, prompt)
-    rag_chain = create_retrieval_chain(retriever, question_answer_chain)
+    # This chain will return a dictionary with "context", "question", and "answer"
+    rag_chain = RunnableParallel(
+        {"context": retriever, "question": RunnablePassthrough()}
+    ).assign(answer=rag_chain_from_docs)
     
     return rag_chain

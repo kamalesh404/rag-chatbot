@@ -73,7 +73,7 @@ if prompt := st.chat_input("Ask a question about your documents..."):
         with st.spinner("Thinking..."):
             try:
                 qa_chain = get_qa_chain()
-                response = qa_chain.invoke({"input": prompt})
+                response = qa_chain.invoke(prompt)
                 
                 answer = response["answer"]
                 sources = response.get("context", [])
